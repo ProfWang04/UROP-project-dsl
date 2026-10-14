@@ -1,0 +1,398 @@
+{
+  "description": "Two-arm N(k=6) curve with Cadmus-style template sampling",
+  "freeze_defaults": {
+    "HARD_API_K": 6,
+    "HARD_HOLDOUT_PAIR": [
+      "add",
+      "mul"
+    ],
+    "n_vars": 6,
+    "min_stmts": 5,
+    "max_stmts": 9,
+    "expr_depth": 3,
+    "min_deps": 3
+  },
+  "gate_knobs_reference_note": "Not used unless --gate-knobs at data gen; curve uses freeze defaults",
+  "holdout_pair_hash": "baa917ed475e7614",
+  "arms": [
+    "hard",
+    "mixture"
+  ],
+  "n_grid": [
+    200,
+    500
+  ],
+  "seed": 0,
+  "epochs": 8,
+  "threshold": 0.9,
+  "results": [
+    {
+      "arm": "hard",
+      "n_train": 200,
+      "seed": 0,
+      "epochs": 8,
+      "n_params": 818176,
+      "sec": 8.38,
+      "freeze_defaults": {
+        "HARD_API_K": 6,
+        "HARD_HOLDOUT_PAIR": [
+          "add",
+          "mul"
+        ],
+        "n_vars": 6,
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "expr_depth": 3,
+        "min_deps": 3
+      },
+      "experiment_knobs": {
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "n_vars": 6,
+        "expr_depth": 3,
+        "min_deps": 3,
+        "min_distinct_apis": 0
+      },
+      "holdout_pair": [
+        "add",
+        "mul"
+      ],
+      "holdout_pair_hash": "baa917ed475e7614",
+      "sample_stats": {
+        "train": {
+          "proposals": 252,
+          "accepts": 200,
+          "reject_rate": 0.2063,
+          "rejects": {
+            "ordered_holdout_forbidden": 52
+          },
+          "template_accepts": {
+            "fanin.three_src_mul": 49,
+            "pipe.chain_set_add_inc_print": 52,
+            "fanin.two_src_add": 36,
+            "pipe.dec_mul_print": 35,
+            "reuse.same_var_loopish": 28
+          }
+        },
+        "test_iid": {
+          "proposals": 50,
+          "accepts": 40,
+          "reject_rate": 0.2,
+          "rejects": {
+            "ordered_holdout_forbidden": 10
+          },
+          "template_accepts": {
+            "fanin.two_src_add": 8,
+            "pipe.dec_mul_print": 8,
+            "fanin.three_src_mul": 6,
+            "pipe.chain_set_add_inc_print": 9,
+            "reuse.same_var_loopish": 9
+          }
+        },
+        "test_holdout": {
+          "proposals": 40,
+          "accepts": 40,
+          "reject_rate": 0.0,
+          "rejects": {},
+          "template_accepts": {
+            "holdout.add_then_mul": 20,
+            "holdout.add_filler_mul": 20
+          }
+        }
+      },
+      "metrics": {
+        "test_iid": {
+          "legal_next_rate": 0.9769585253456221,
+          "exec_accept_rate": 0.03333333333333333,
+          "n": 30,
+          "n_unique_programs": 30
+        },
+        "test_holdout": {
+          "legal_next_rate": 0.8511904761904762,
+          "exec_accept_rate": 0.0,
+          "n": 30,
+          "n_unique_programs": 29
+        }
+      },
+      "final_loss": 1.6769653047834123
+    },
+    {
+      "arm": "hard",
+      "n_train": 500,
+      "seed": 0,
+      "epochs": 8,
+      "n_params": 818176,
+      "sec": 18.71,
+      "freeze_defaults": {
+        "HARD_API_K": 6,
+        "HARD_HOLDOUT_PAIR": [
+          "add",
+          "mul"
+        ],
+        "n_vars": 6,
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "expr_depth": 3,
+        "min_deps": 3
+      },
+      "experiment_knobs": {
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "n_vars": 6,
+        "expr_depth": 3,
+        "min_deps": 3,
+        "min_distinct_apis": 0
+      },
+      "holdout_pair": [
+        "add",
+        "mul"
+      ],
+      "holdout_pair_hash": "baa917ed475e7614",
+      "sample_stats": {
+        "train": {
+          "proposals": 607,
+          "accepts": 502,
+          "reject_rate": 0.173,
+          "rejects": {
+            "ordered_holdout_forbidden": 105
+          },
+          "template_accepts": {
+            "fanin.three_src_mul": 122,
+            "pipe.chain_set_add_inc_print": 103,
+            "fanin.two_src_add": 98,
+            "pipe.dec_mul_print": 96,
+            "reuse.same_var_loopish": 83
+          }
+        },
+        "test_iid": {
+          "proposals": 68,
+          "accepts": 52,
+          "reject_rate": 0.2353,
+          "rejects": {
+            "ordered_holdout_forbidden": 16
+          },
+          "template_accepts": {
+            "pipe.dec_mul_print": 13,
+            "reuse.same_var_loopish": 9,
+            "pipe.chain_set_add_inc_print": 9,
+            "fanin.three_src_mul": 10,
+            "fanin.two_src_add": 11
+          }
+        },
+        "test_holdout": {
+          "proposals": 50,
+          "accepts": 50,
+          "reject_rate": 0.0,
+          "rejects": {},
+          "template_accepts": {
+            "holdout.add_filler_mul": 30,
+            "holdout.add_then_mul": 20
+          }
+        }
+      },
+      "metrics": {
+        "test_iid": {
+          "legal_next_rate": 1.0,
+          "exec_accept_rate": 0.23333333333333334,
+          "n": 30,
+          "n_unique_programs": 30
+        },
+        "test_holdout": {
+          "legal_next_rate": 0.8586309523809523,
+          "exec_accept_rate": 0.13333333333333333,
+          "n": 30,
+          "n_unique_programs": 30
+        }
+      },
+      "final_loss": 0.7936951816082001
+    },
+    {
+      "arm": "mixture",
+      "n_train": 200,
+      "seed": 0,
+      "epochs": 8,
+      "n_params": 818176,
+      "sec": 8.26,
+      "freeze_defaults": {
+        "HARD_API_K": 6,
+        "HARD_HOLDOUT_PAIR": [
+          "add",
+          "mul"
+        ],
+        "n_vars": 6,
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "expr_depth": 3,
+        "min_deps": 3
+      },
+      "experiment_knobs": {
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "n_vars": 6,
+        "expr_depth": 3,
+        "min_deps": 3,
+        "min_distinct_apis": 0
+      },
+      "holdout_pair": [
+        "add",
+        "mul"
+      ],
+      "holdout_pair_hash": "baa917ed475e7614",
+      "sample_stats": {
+        "train": {
+          "proposals": 213,
+          "accepts": 200,
+          "reject_rate": 0.061,
+          "rejects": {
+            "ordered_holdout_forbidden": 13
+          },
+          "template_accepts": {
+            "mixture_k3": 69,
+            "reuse.same_var_loopish": 13,
+            "fanin.three_src_mul": 16,
+            "mixture_k2": 66,
+            "pipe.chain_set_add_inc_print": 12,
+            "fanin.two_src_add": 10,
+            "pipe.dec_mul_print": 14
+          }
+        },
+        "test_iid": {
+          "proposals": 51,
+          "accepts": 40,
+          "reject_rate": 0.2157,
+          "rejects": {
+            "ordered_holdout_forbidden": 11
+          },
+          "template_accepts": {
+            "reuse.same_var_loopish": 8,
+            "fanin.two_src_add": 4,
+            "pipe.dec_mul_print": 10,
+            "fanin.three_src_mul": 10,
+            "pipe.chain_set_add_inc_print": 8
+          }
+        },
+        "test_holdout": {
+          "proposals": 40,
+          "accepts": 40,
+          "reject_rate": 0.0,
+          "rejects": {},
+          "template_accepts": {
+            "holdout.add_then_mul": 20,
+            "holdout.add_filler_mul": 20
+          }
+        }
+      },
+      "metrics": {
+        "test_iid": {
+          "legal_next_rate": 0.959214501510574,
+          "exec_accept_rate": 0.06666666666666667,
+          "n": 30,
+          "n_unique_programs": 30
+        },
+        "test_holdout": {
+          "legal_next_rate": 0.8725925925925926,
+          "exec_accept_rate": 0.06666666666666667,
+          "n": 30,
+          "n_unique_programs": 29
+        }
+      },
+      "final_loss": 2.270304100854056
+    },
+    {
+      "arm": "mixture",
+      "n_train": 500,
+      "seed": 0,
+      "epochs": 8,
+      "n_params": 818176,
+      "sec": 18.94,
+      "freeze_defaults": {
+        "HARD_API_K": 6,
+        "HARD_HOLDOUT_PAIR": [
+          "add",
+          "mul"
+        ],
+        "n_vars": 6,
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "expr_depth": 3,
+        "min_deps": 3
+      },
+      "experiment_knobs": {
+        "min_stmts": 5,
+        "max_stmts": 9,
+        "n_vars": 6,
+        "expr_depth": 3,
+        "min_deps": 3,
+        "min_distinct_apis": 0
+      },
+      "holdout_pair": [
+        "add",
+        "mul"
+      ],
+      "holdout_pair_hash": "baa917ed475e7614",
+      "sample_stats": {
+        "train": {
+          "proposals": 544,
+          "accepts": 500,
+          "reject_rate": 0.0809,
+          "rejects": {
+            "ordered_holdout_forbidden": 44
+          },
+          "template_accepts": {
+            "mixture_k3": 169,
+            "reuse.same_var_loopish": 37,
+            "fanin.three_src_mul": 36,
+            "mixture_k2": 162,
+            "pipe.chain_set_add_inc_print": 40,
+            "fanin.two_src_add": 22,
+            "pipe.dec_mul_print": 34
+          }
+        },
+        "test_iid": {
+          "proposals": 58,
+          "accepts": 50,
+          "reject_rate": 0.1379,
+          "rejects": {
+            "ordered_holdout_forbidden": 8
+          },
+          "template_accepts": {
+            "reuse.same_var_loopish": 13,
+            "pipe.chain_set_add_inc_print": 6,
+            "pipe.dec_mul_print": 11,
+            "fanin.three_src_mul": 9,
+            "fanin.two_src_add": 11
+          }
+        },
+        "test_holdout": {
+          "proposals": 50,
+          "accepts": 50,
+          "reject_rate": 0.0,
+          "rejects": {},
+          "template_accepts": {
+            "holdout.add_then_mul": 24,
+            "holdout.add_filler_mul": 26
+          }
+        }
+      },
+      "metrics": {
+        "test_iid": {
+          "legal_next_rate": 1.0,
+          "exec_accept_rate": 0.26666666666666666,
+          "n": 30,
+          "n_unique_programs": 30
+        },
+        "test_holdout": {
+          "legal_next_rate": 0.9099099099099099,
+          "exec_accept_rate": 0.3333333333333333,
+          "n": 30,
+          "n_unique_programs": 30
+        }
+      },
+      "final_loss": 1.934811107814312
+    }
+  ],
+  "N_star_by_arm": {
+    "hard": null,
+    "mixture": null
+  }
+}

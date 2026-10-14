@@ -1,0 +1,50 @@
+{
+  "freeze": {
+    "api_k": 6,
+    "apis": [
+      "set",
+      "print",
+      "inc",
+      "dec",
+      "add",
+      "mul"
+    ],
+    "holdout_pair": [
+      "add",
+      "mul"
+    ],
+    "holdout_mode": "ordered_A_then_B",
+    "min_deps": 7,
+    "min_distinct_apis": 4,
+    "cfg": {
+      "n_vars": 6,
+      "min_stmts": 10,
+      "max_stmts": 16,
+      "expr_depth": 3
+    }
+  },
+  "n_params": 818176,
+  "vocab": 33,
+  "n_train": 1000,
+  "epochs": 15,
+  "device": "cpu",
+  "random_legal_next_rate": 0.3243,
+  "random_exec_accept_rate": 0.0,
+  "toy_baseline_iid_exec": 0.84,
+  "trained": {
+    "test_iid": {
+      "legal_next_rate": 0.9993988578298768,
+      "exec_accept_rate": 0.6125,
+      "n_unique_programs": 80,
+      "n": 80
+    },
+    "test_holdout": {
+      "legal_next_rate": 1.0,
+      "exec_accept_rate": 0.6125,
+      "n_unique_programs": 80,
+      "n": 80
+    }
+  },
+  "gate": "PASS",
+  "gate_detail": "iid_exec in target band 40-60%; clearly harder than toy 84%"
+}

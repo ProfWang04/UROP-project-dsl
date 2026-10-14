@@ -1,0 +1,22 @@
+{
+  "n_params": 809216,
+  "vocab": 30,
+  "config": "L1 api_k=3 N=1000 epochs=15 d=128 n_layer=4",
+  "random_legal_next_rate": 0.334,
+  "random_exec_accept_rate": 0.02,
+  "trained": {
+    "test_iid": {
+      "legal_next_rate": 0.9963,
+      "exec_accept_rate": 0.84,
+      "n_unique_programs": 50,
+      "n": 50
+    },
+    "test_holdout": {
+      "legal_next_rate": 1.0,
+      "exec_accept_rate": 0.82,
+      "n_unique_programs": 50,
+      "n": 50
+    }
+  },
+  "verdict": "NTP sanity pass: legal-next and sampled exec-accept clearly above random."
+}

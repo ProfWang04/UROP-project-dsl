@@ -1,0 +1,25 @@
+{
+  "arm": "hard",
+  "n_grid": [
+    200,
+    500
+  ],
+  "threshold": 0.9,
+  "N_star_6": null,
+  "points": [
+    {
+      "n": 200,
+      "iid_exec": 0.03333333333333333,
+      "holdout_exec": 0.0,
+      "iid_legal": 0.9769585253456221,
+      "holdout_legal": 0.8511904761904762
+    },
+    {
+      "n": 500,
+      "iid_exec": 0.23333333333333334,
+      "holdout_exec": 0.13333333333333333,
+      "iid_legal": 1.0,
+      "holdout_legal": 0.8586309523809523
+    }
+  ]
+}
