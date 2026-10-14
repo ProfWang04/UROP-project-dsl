@@ -91,6 +91,11 @@ def main(argv: list[str] | None = None) -> None:
     else:
         hard = args.hard or args.arm in ("hard", "mixture")
         api_k = 6 if hard else args.api_k
+        print(
+            f"[train] generating data n_train={args.n_train} arm={args.arm} "
+            f"hard={hard} gate_knobs={args.gate_knobs} seed={args.seed}",
+            flush=True,
+        )
         split = generate_dataset(
             level=args.level,
             n_train=args.n_train,

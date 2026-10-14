@@ -15,6 +15,7 @@ from .hard_l1 import (
     HARD_API_K,
     HARD_HOLDOUT_PAIR,
     FREEZE_MIN_DEPS,
+    FREEZE_MIN_STMTS,
     HardGenKnobs,
     accept_hard_program,
     generate_hard_l1,
@@ -256,7 +257,17 @@ def sample_with_templates(
     stats = stats or SampleStats()
     api_a, api_b = holdout_pair
 
-    for _ in range(max_tries):
+    # Short fixed templates (~6–9 ops, ~3k unique under gate knobs) accept but
+    # exhaust uniqueness long before N=10k. Prefer procedural when gates exceed
+    # freeze defaults so large datasets finish.
+    gate_like = (
+        deps > FREEZE_MIN_DEPS
+        or min_distinct_apis > 0
+        or cfg.min_stmts > FREEZE_MIN_STMTS
+    )
+    template_tries = 0 if gate_like else max_tries
+
+    for _ in range(template_tries):
         spec = choose_template(rng, holdout=holdout)
         stats.proposals += 1
         tokens = instantiate(spec.template_id, rng, variables)
@@ -275,33 +286,44 @@ def sample_with_templates(
         stats.reject(reason)
 
     if fallback_procedural:
-        stats.proposals += 1
-        if holdout:
-            tokens = generate_hard_holdout_combo(cfg, api_a, api_b, rng, min_deps=deps)
-            ok, reason = accept_hard_program(
-                tokens,
-                apis=apis,
-                min_deps=deps,
-                min_distinct_apis=min_distinct_apis,
-                require_ordered_holdout=True,
-                holdout_pair=holdout_pair,
-            )
-        else:
-            tokens = generate_hard_l1(
-                cfg, rng, min_deps=deps, min_distinct_apis=min_distinct_apis
-            )
-            ok, reason = accept_hard_program(
-                tokens,
-                apis=apis,
-                min_deps=deps,
-                min_distinct_apis=min_distinct_apis,
-                forbid_ordered_holdout=True,
-                holdout_pair=holdout_pair,
-            )
-        if ok:
-            stats.accept("procedural_fallback")
-            return tokens, "procedural_fallback"
-        stats.reject(reason)
+        # Templates are short (~6–9 ops); under gate knobs (min_deps=7, …)
+        # almost all template proposals fail. Retry procedural many times so
+        # uniqueness does not stall after ~3k reuse.same_var_loopish programs.
+        for _ in range(max(max_tries, 40)):
+            stats.proposals += 1
+            if holdout:
+                tokens = generate_hard_holdout_combo(
+                    cfg, api_a, api_b, rng, min_deps=deps
+                )
+                ok, reason = accept_hard_program(
+                    tokens,
+                    apis=apis,
+                    min_deps=deps,
+                    min_distinct_apis=min_distinct_apis,
+                    require_ordered_holdout=True,
+                    holdout_pair=holdout_pair,
+                )
+            else:
+                tokens = generate_hard_l1(
+                    cfg,
+                    rng,
+                    min_deps=deps,
+                    min_distinct_apis=min_distinct_apis,
+                    forbid_ordered_holdout=True,
+                    holdout_pair=holdout_pair,
+                )
+                ok, reason = accept_hard_program(
+                    tokens,
+                    apis=apis,
+                    min_deps=deps,
+                    min_distinct_apis=min_distinct_apis,
+                    forbid_ordered_holdout=True,
+                    holdout_pair=holdout_pair,
+                )
+            if ok:
+                stats.accept("procedural_fallback")
+                return tokens, "procedural_fallback"
+            stats.reject(reason)
 
     v = variables[0]
     if holdout:

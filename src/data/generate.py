@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -153,7 +154,12 @@ def generate_l1_dataset(
             from src.dsl.hard_l1 import generate_hard_l1, accept_hard_program
 
             toks = generate_hard_l1(
-                cfg, rng, min_deps=deps, min_distinct_apis=knobs.min_distinct_apis
+                cfg,
+                rng,
+                min_deps=deps,
+                min_distinct_apis=knobs.min_distinct_apis,
+                forbid_ordered_holdout=True,
+                holdout_pair=(api_a, api_b),
             )
             ok, _ = accept_hard_program(
                 toks,
@@ -182,16 +188,71 @@ def generate_l1_dataset(
 
     train: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
+    progress_every = max(100, n_train // 20)
+    consecutive_dupes = 0
+    t_gen0 = time.perf_counter()
+    print(
+        f"[data] generate_l1_dataset start n_train={n_train} arm={arm} "
+        f"gate_knobs={gate_knobs} knobs={knobs.to_dict()}",
+        flush=True,
+    )
+
+    def sample_procedural_unique(stats: SampleStats) -> list[str] | None:
+        """Bypass short templates once uniqueness saturates (~3k under gate knobs)."""
+        from src.dsl.hard_l1 import generate_hard_l1, accept_hard_program
+
+        for _ in range(80):
+            stats.proposals += 1
+            cand = generate_hard_l1(
+                cfg,
+                rng,
+                min_deps=deps,
+                min_distinct_apis=knobs.min_distinct_apis,
+                forbid_ordered_holdout=True,
+                holdout_pair=(api_a, api_b),
+            )
+            ok, reason = accept_hard_program(
+                cand,
+                apis=apis,
+                min_deps=deps,
+                min_distinct_apis=knobs.min_distinct_apis,
+                forbid_ordered_holdout=True,
+                holdout_pair=(api_a, api_b),
+            )
+            if not ok:
+                stats.reject(reason)
+                continue
+            stats.accept("procedural_dedupe")
+            template_ids_train.append("procedural_dedupe")
+            return cand
+        return None
 
     while len(train) < n_train:
-        toks = sample_train_like(train_stats)
+        # Gate knobs + templates only yield ~3k unique programs; after a short
+        # duplicate streak, force procedural sampling so N=1e4 can finish.
+        force_proc = use_hard and consecutive_dupes >= 8
+        if force_proc:
+            toks = sample_procedural_unique(train_stats)
+        else:
+            toks = sample_train_like(train_stats)
         if toks is None:
+            consecutive_dupes += 1
             continue
         key = tuple(toks)
         if key in seen:
+            consecutive_dupes += 1
             continue
+        consecutive_dupes = 0
         seen.add(key)
         train.append(_wrap(toks))
+        if len(train) % progress_every == 0 or len(train) == n_train:
+            rr = train_stats.reject_rate
+            print(
+                f"[data] train {len(train)}/{n_train} "
+                f"proposals={train_stats.proposals} reject_rate={rr:.3f} "
+                f"elapsed={time.perf_counter() - t_gen0:.1f}s",
+                flush=True,
+            )
 
     test_iid: list[list[str]] = []
     while len(test_iid) < n_test_iid:
@@ -242,6 +303,14 @@ def generate_l1_dataset(
             continue
         seen.add(key)
         test_holdout.append(_wrap(toks))
+
+    print(
+        f"[data] generate_l1_dataset done train={len(train)} "
+        f"iid={len(test_iid)} holdout={len(test_holdout)} "
+        f"elapsed={time.perf_counter() - t_gen0:.1f}s "
+        f"train_reject_rate={train_stats.reject_rate:.3f}",
+        flush=True,
+    )
 
     meta = {
         "level": "l1",

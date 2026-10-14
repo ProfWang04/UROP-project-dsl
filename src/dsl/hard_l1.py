@@ -173,6 +173,8 @@ def generate_hard_l1(
     rng: random.Random | None = None,
     min_deps: int = FREEZE_MIN_DEPS,
     min_distinct_apis: int = 0,
+    forbid_ordered_holdout: bool = False,
+    holdout_pair: tuple[str, str] = HARD_HOLDOUT_PAIR,
 ) -> list[str]:
     """Procedural hard-L1 sampler (fallback behind template front-end)."""
     cfg = cfg or hard_l1_config()
@@ -181,7 +183,7 @@ def generate_hard_l1(
     variables = cfg.vars
     n_stmts = rng.randint(cfg.min_stmts, cfg.max_stmts)
 
-    for _attempt in range(60):
+    for _attempt in range(80):
         tokens: list[str] = []
         defined: list[str] = []
 
@@ -237,6 +239,8 @@ def generate_hard_l1(
             apis=apis,
             min_deps=min_deps,
             min_distinct_apis=min_distinct_apis,
+            forbid_ordered_holdout=forbid_ordered_holdout,
+            holdout_pair=holdout_pair,
         )
         if ok:
             return tokens
