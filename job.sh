@@ -1,7 +1,7 @@
 #!/bin/bash
 # CSE COMPUTE job for Project DSL hard L1 grid (4 GPUs).
 # Workdir: /project/zihanz_project1/urop-dsl-hard-l1
-# Image: stage1-distance  |  SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)
+  SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)|  SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH=.
