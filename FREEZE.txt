@@ -1,17 +1,1 @@
-Project DSL — hard-L1 pack for CSE COMPUTE
-branch: cursor/phase1-dsl-ntp-ef54
-
-FREEZE DEFAULTS (code constants in src/dsl/hard_l1.py):
-  HARD_API_K = 6
-  HARD_HOLDOUT_PAIR = ("add", "mul")  # ordered
-  n_vars = 6
-  min_stmts = 5
-  max_stmts = 9
-  expr_depth = 3
-  min_deps = 3
-
-GATE_KNOBS (historical only; not freeze):
-  min_stmts=10, max_stmts=16, min_deps=7, min_distinct_apis=4
-
-Template front-end: src/dsl/templates_hard_l1.py
-N-curve: python -m src.experiments.n_curve --arms hard mixture --n-grid 200 500 1000
+FREEZE k=6 stmts 5-9 deps 3; GATE_KNOBS stmts 10-16 deps 7 distinct 4

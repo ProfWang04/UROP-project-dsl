@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import random
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +19,8 @@ from src.dsl.hard_l1 import (
     HardGenKnobs,
     hard_l1_config,
     has_ordered_api_pair,
-    count_cross_stmt_deps,
+    accept_hard_program,
+    force_unique_hard_program,
 )
 from src.dsl.templates_hard_l1 import (
     TEMPLATES,
@@ -135,179 +135,222 @@ def generate_l1_dataset(
     iid_stats = SampleStats()
     holdout_stats = SampleStats()
     template_ids_train: list[str] = []
+    progress_every = max(100, n_train // 20)
 
-    def sample_train_like(stats: SampleStats) -> list[str] | None:
-        if arm == "hard" or (hard and arm != "mixture"):
+    def _progress(split_name: str, have: int, need: int, dups: int) -> None:
+        print(
+            f"[generate] {split_name}: {have}/{need} unique "
+            f"(dup_streak={dups}, arm={arm}, gate_knobs={gate_knobs})",
+            flush=True,
+        )
+
+    def sample_candidate(
+        stats: SampleStats,
+        *,
+        holdout: bool,
+        salt: int,
+        prefer_procedural: bool = False,
+    ) -> tuple[list[str], str] | None:
+        if arm == "mixture" and not holdout:
+            # Train mixture; IID hard path uses holdout=False templates below
+            toks, tid, _k = sample_mixture_curriculum(
+                rng, knobs=knobs, min_deps=deps, stats=stats
+            )
+            return toks, tid
+
+        if use_hard and (arm in ("hard", "mixture") or hard):
             if use_templates:
                 toks, tid = sample_with_templates(
                     rng,
-                    holdout=False,
+                    holdout=holdout,
                     cfg=cfg,
                     knobs=knobs,
                     min_deps=deps,
                     min_distinct_apis=knobs.min_distinct_apis,
                     holdout_pair=(api_a, api_b),
                     stats=stats,
+                    salt=salt,
+                    prefer_procedural=prefer_procedural,
                 )
-                template_ids_train.append(tid)
-                return toks
-            from src.dsl.hard_l1 import generate_hard_l1, accept_hard_program
+                ok, _ = accept_hard_program(
+                    toks,
+                    apis=apis,
+                    min_deps=deps,
+                    min_distinct_apis=knobs.min_distinct_apis,
+                    require_ordered_holdout=True if holdout else None,
+                    forbid_ordered_holdout=(not holdout),
+                    holdout_pair=(api_a, api_b),
+                )
+                return (toks, tid) if ok else None
+            from src.dsl.hard_l1 import generate_hard_l1, generate_hard_holdout_combo
 
-            toks = generate_hard_l1(
-                cfg,
-                rng,
-                min_deps=deps,
-                min_distinct_apis=knobs.min_distinct_apis,
-                forbid_ordered_holdout=True,
-                holdout_pair=(api_a, api_b),
-            )
+            if holdout:
+                toks = generate_hard_holdout_combo(
+                    cfg, api_a, api_b, rng, min_deps=deps,
+                    min_distinct_apis=knobs.min_distinct_apis, salt=salt,
+                )
+            else:
+                toks = generate_hard_l1(
+                    cfg, rng, min_deps=deps,
+                    min_distinct_apis=knobs.min_distinct_apis,
+                    forbid_ordered_holdout=True, holdout_pair=(api_a, api_b),
+                    salt=salt,
+                )
             ok, _ = accept_hard_program(
-                toks,
-                apis=apis,
-                min_deps=deps,
+                toks, apis=apis, min_deps=deps,
                 min_distinct_apis=knobs.min_distinct_apis,
-                forbid_ordered_holdout=True,
+                require_ordered_holdout=True if holdout else None,
+                forbid_ordered_holdout=(not holdout),
                 holdout_pair=(api_a, api_b),
             )
-            return toks if ok else None
-
-        if arm == "mixture":
-            toks, tid, _k = sample_mixture_curriculum(
-                rng, knobs=knobs, min_deps=deps, stats=stats
-            )
-            template_ids_train.append(tid)
-            return toks
+            return (toks, "procedural") if ok else None
 
         # soft toy path
-        toks = generate_l1(cfg, rng)
-        if api_a in toks and api_b in toks:
-            return None
+        if holdout:
+            toks = generate_l1_holdout_combo(cfg, api_a, api_b, rng)
+            if not (api_a in toks and api_b in toks):
+                return None
+        else:
+            toks = generate_l1(cfg, rng)
+            if api_a in toks and api_b in toks:
+                return None
         if not evaluate_l1(toks, api_k=api_k_eval).ok:
             return None
-        return toks
+        return toks, "soft"
 
-    train: list[list[str]] = []
-    seen: set[tuple[str, ...]] = set()
-    progress_every = max(100, n_train // 20)
-    consecutive_dupes = 0
-    t_gen0 = time.perf_counter()
+    def fill_unique(
+        n_need: int,
+        *,
+        holdout: bool,
+        stats: SampleStats,
+        split_name: str,
+        seen: set[tuple[str, ...]],
+        record_tid: bool = False,
+    ) -> list[list[str]]:
+        out: list[list[str]] = []
+        dup_streak = 0
+        attempts = 0
+        max_attempts = max(50_000, n_need * 50)
+        while len(out) < n_need and attempts < max_attempts:
+            attempts += 1
+            # Bias to procedural only after duplicate streak (hang escape).
+            cand = sample_candidate(
+                stats,
+                holdout=holdout,
+                salt=attempts + len(seen) * 7,
+                prefer_procedural=(dup_streak >= 8),
+            )
+            if cand is None:
+                dup_streak += 1
+                continue
+            toks, tid = cand
+            key = tuple(toks)
+            if key in seen:
+                dup_streak += 1
+                if dup_streak >= 20 and use_hard:
+                    forced = force_unique_hard_program(
+                        seen, cfg, rng,
+                        holdout=holdout,
+                        min_deps=deps,
+                        min_distinct_apis=knobs.min_distinct_apis,
+                        holdout_pair=(api_a, api_b),
+                    )
+                    if forced is None:
+                        print(
+                            f"[generate] WARN {split_name}: force_unique failed "
+                            f"at {len(out)}/{n_need}",
+                            flush=True,
+                        )
+                        break
+                    toks, tid = forced, "force_unique"
+                    key = tuple(toks)
+                    dup_streak = 0
+                else:
+                    continue
+            else:
+                dup_streak = 0
+            seen.add(key)
+            out.append(_wrap(toks))
+            if record_tid:
+                template_ids_train.append(tid)
+            if len(out) % progress_every == 0 or len(out) == n_need:
+                _progress(split_name, len(out), n_need, dup_streak)
+        if len(out) < n_need:
+            raise RuntimeError(
+                f"Failed to gather {n_need} unique {split_name} programs "
+                f"(got {len(out)} after {attempts} attempts; gate_knobs={gate_knobs})"
+            )
+        return out
+
     print(
-        f"[data] generate_l1_dataset start n_train={n_train} arm={arm} "
-        f"gate_knobs={gate_knobs} knobs={knobs.to_dict()}",
+        f"[generate] start arm={arm} n_train={n_train} gate_knobs={gate_knobs} "
+        f"knobs={knobs.to_dict()} holdout={api_a}∘{api_b}",
         flush=True,
     )
+    seen: set[tuple[str, ...]] = set()
+    train = fill_unique(
+        n_train, holdout=False, stats=train_stats, split_name="train",
+        seen=seen, record_tid=True,
+    )
 
-    def sample_procedural_unique(stats: SampleStats) -> list[str] | None:
-        """Bypass short templates once uniqueness saturates (~3k under gate knobs)."""
-        from src.dsl.hard_l1 import generate_hard_l1, accept_hard_program
-
-        for _ in range(80):
-            stats.proposals += 1
-            cand = generate_hard_l1(
-                cfg,
-                rng,
-                min_deps=deps,
-                min_distinct_apis=knobs.min_distinct_apis,
-                forbid_ordered_holdout=True,
-                holdout_pair=(api_a, api_b),
-            )
-            ok, reason = accept_hard_program(
-                cand,
-                apis=apis,
-                min_deps=deps,
-                min_distinct_apis=knobs.min_distinct_apis,
-                forbid_ordered_holdout=True,
-                holdout_pair=(api_a, api_b),
-            )
-            if not ok:
-                stats.reject(reason)
-                continue
-            stats.accept("procedural_dedupe")
-            template_ids_train.append("procedural_dedupe")
-            return cand
-        return None
-
-    while len(train) < n_train:
-        # Gate knobs + templates only yield ~3k unique programs; after a short
-        # duplicate streak, force procedural sampling so N=1e4 can finish.
-        force_proc = use_hard and consecutive_dupes >= 8
-        if force_proc:
-            toks = sample_procedural_unique(train_stats)
-        else:
-            toks = sample_train_like(train_stats)
-        if toks is None:
-            consecutive_dupes += 1
-            continue
-        key = tuple(toks)
-        if key in seen:
-            consecutive_dupes += 1
-            continue
-        consecutive_dupes = 0
-        seen.add(key)
-        train.append(_wrap(toks))
-        if len(train) % progress_every == 0 or len(train) == n_train:
-            rr = train_stats.reject_rate
-            print(
-                f"[data] train {len(train)}/{n_train} "
-                f"proposals={train_stats.proposals} reject_rate={rr:.3f} "
-                f"elapsed={time.perf_counter() - t_gen0:.1f}s",
-                flush=True,
-            )
+    # IID: for mixture arm, evaluate on hard k=6 distribution
+    def sample_iid_hard(stats: SampleStats, salt: int, prefer: bool):
+        return sample_with_templates(
+            rng, holdout=False, cfg=cfg, knobs=knobs, min_deps=deps,
+            min_distinct_apis=knobs.min_distinct_apis,
+            holdout_pair=(api_a, api_b), stats=stats, salt=salt,
+            prefer_procedural=prefer or gate_knobs,
+        )
 
     test_iid: list[list[str]] = []
-    while len(test_iid) < n_test_iid:
-        # Mixture: IID eval on hard k=6 templates for fair N(k=6) curve
-        if arm == "mixture":
-            toks, _tid = sample_with_templates(
-                rng,
-                holdout=False,
-                cfg=cfg,
-                knobs=knobs,
-                min_deps=deps,
-                holdout_pair=(api_a, api_b),
-                stats=iid_stats,
+    if arm == "mixture":
+        dup_streak = 0
+        attempts = 0
+        while len(test_iid) < n_test_iid:
+            attempts += 1
+            toks, _tid = sample_iid_hard(iid_stats, attempts, prefer=dup_streak >= 8)
+            ok, _ = accept_hard_program(
+                toks, apis=apis, min_deps=deps,
+                min_distinct_apis=knobs.min_distinct_apis,
+                forbid_ordered_holdout=True, holdout_pair=(api_a, api_b),
             )
-        else:
-            toks = sample_train_like(iid_stats)
-            if toks is None:
+            if not ok:
                 continue
-        key = tuple(toks)
-        if key in seen:
-            continue
-        seen.add(key)
-        test_iid.append(_wrap(toks))
+            key = tuple(toks)
+            if key in seen:
+                dup_streak += 1
+                if dup_streak >= 20:
+                    forced = force_unique_hard_program(
+                        seen, cfg, rng, holdout=False, min_deps=deps,
+                        min_distinct_apis=knobs.min_distinct_apis,
+                        holdout_pair=(api_a, api_b),
+                    )
+                    if forced is None:
+                        break
+                    toks = forced
+                    key = tuple(toks)
+                    dup_streak = 0
+                else:
+                    continue
+            else:
+                dup_streak = 0
+            seen.add(key)
+            test_iid.append(_wrap(toks))
+            if len(test_iid) % max(20, n_test_iid // 5) == 0:
+                _progress("test_iid", len(test_iid), n_test_iid, dup_streak)
+    else:
+        test_iid = fill_unique(
+            n_test_iid, holdout=False, stats=iid_stats, split_name="test_iid",
+            seen=seen,
+        )
 
-    test_holdout: list[list[str]] = []
-    while len(test_holdout) < n_test_holdout:
-        if use_hard:
-            toks, _tid = sample_with_templates(
-                rng,
-                holdout=True,
-                cfg=cfg,
-                knobs=knobs,
-                min_deps=deps,
-                holdout_pair=(api_a, api_b),
-                stats=holdout_stats,
-            )
-        else:
-            toks = generate_l1_holdout_combo(cfg, api_a, api_b, rng)
-        key = tuple(toks)
-        if key in seen:
-            continue
-        if use_hard:
-            if not has_ordered_api_pair(toks, api_a, api_b):
-                continue
-        elif not (api_a in toks and api_b in toks):
-            continue
-        if not evaluate_l1(toks, api_k=api_k_eval).ok:
-            continue
-        seen.add(key)
-        test_holdout.append(_wrap(toks))
-
+    test_holdout = fill_unique(
+        n_test_holdout, holdout=True, stats=holdout_stats, split_name="test_holdout",
+        seen=seen,
+    )
     print(
-        f"[data] generate_l1_dataset done train={len(train)} "
-        f"iid={len(test_iid)} holdout={len(test_holdout)} "
-        f"elapsed={time.perf_counter() - t_gen0:.1f}s "
+        f"[generate] done train={len(train)} iid={len(test_iid)} "
+        f"holdout={len(test_holdout)} "
         f"train_reject_rate={train_stats.reject_rate:.3f}",
         flush=True,
     )
@@ -418,7 +461,8 @@ def save_dataset(split: DatasetSplit, out_dir: Path) -> None:
     )
 
 
-def load_split(path: Path) -> list[list[str]]:
+def load_split(path: Path | str) -> list[list[str]]:
+    path = Path(path)
     rows = []
     with path.open(encoding="utf-8") as f:
         for line in f:

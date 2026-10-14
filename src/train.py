@@ -91,11 +91,6 @@ def main(argv: list[str] | None = None) -> None:
     else:
         hard = args.hard or args.arm in ("hard", "mixture")
         api_k = 6 if hard else args.api_k
-        print(
-            f"[train] generating data n_train={args.n_train} arm={args.arm} "
-            f"hard={hard} gate_knobs={args.gate_knobs} seed={args.seed}",
-            flush=True,
-        )
         split = generate_dataset(
             level=args.level,
             n_train=args.n_train,
@@ -112,24 +107,7 @@ def main(argv: list[str] | None = None) -> None:
         level = args.level
 
     vocab = build_vocab(level=level, api_k=api_k)
-    print(
-        f"[train] data ready n_train={len(train_seqs)} level={level} api_k={api_k} "
-        f"out={out_dir}",
-        flush=True,
-    )
     device = torch.device(args.device)
-    if device.type == "cuda":
-        print(
-            f"[train] cuda.is_available={torch.cuda.is_available()} "
-            f"device_count={torch.cuda.device_count()} "
-            f"CUDA_VISIBLE_DEVICES={__import__('os').environ.get('CUDA_VISIBLE_DEVICES')}",
-            flush=True,
-        )
-        if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
-            raise RuntimeError(
-                "requested --device cuda but no CUDA device is visible; "
-                "check COMPUTE GPU count and CUDA_VISIBLE_DEVICES"
-            )
 
     cfg = ModelConfig(
         vocab_size=len(vocab),
@@ -138,10 +116,9 @@ def main(argv: list[str] | None = None) -> None:
         n_embd=args.n_embd,
         block_size=args.block_size,
     )
-    print(f"[train] building MiniGPT then .to({device})", flush=True)
     model = MiniGPT(cfg).to(device)
     n_params = count_parameters(model)
-    print(f"vocab={len(vocab)} params={n_params:,} device={device}", flush=True)
+    print(f"vocab={len(vocab)} params={n_params:,} device={device}")
 
     ds = TokenDataset(train_seqs, vocab, args.block_size)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True)
@@ -165,7 +142,7 @@ def main(argv: list[str] | None = None) -> None:
             n_batches += 1
         avg_loss = total_loss / max(n_batches, 1)
         row: dict = {"epoch": epoch, "loss": avg_loss, "sec": time.time() - t0}
-        print(f"epoch {epoch:3d}  loss={avg_loss:.4f}", flush=True)
+        print(f"epoch {epoch:3d}  loss={avg_loss:.4f}")
 
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             metrics = evaluate_model(

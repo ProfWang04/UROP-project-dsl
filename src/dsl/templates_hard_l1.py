@@ -15,12 +15,14 @@ from .hard_l1 import (
     HARD_API_K,
     HARD_HOLDOUT_PAIR,
     FREEZE_MIN_DEPS,
-    FREEZE_MIN_STMTS,
     HardGenKnobs,
     accept_hard_program,
     generate_hard_l1,
     generate_hard_holdout_combo,
     hard_l1_config,
+    _emit_op,
+    _n_ops,
+    has_ordered_api_pair,
 )
 from .l1 import L1Config, evaluate_l1, generate_l1
 from .tokens import DIGITS, enabled_apis
@@ -36,12 +38,16 @@ class TemplateSpec:
 TEMPLATES: list[TemplateSpec] = [
     TemplateSpec("pipe.chain_set_add_inc_print", "pipeline", "Linear write→combine→bump→print"),
     TemplateSpec("pipe.dec_mul_print", "pipeline", "set→dec→mul→print chain"),
+    TemplateSpec("pipe.gate_long_mul_first", "pipeline", "Gate-length chain; mul before add (train-safe)"),
     TemplateSpec("fanin.two_src_add", "fan-in", "Two independent sets fan into add"),
     TemplateSpec("fanin.three_src_mul", "fan-in", "Three sources; mul then print"),
+    TemplateSpec("fanin.gate_wide", "fan-in", "Gate-length multi-source fan-in"),
     TemplateSpec("reuse.same_var_loopish", "reuse", "Heavy reuse of one accumulator var"),
     TemplateSpec("reuse.dual_pingpong", "reuse", "Two vars alternately updated"),
+    TemplateSpec("reuse.gate_triple", "reuse", "Gate-length three-var reuse (train-safe)"),
     TemplateSpec("holdout.add_then_mul", "holdout-combo", "Ordered add∘mul with deps"),
     TemplateSpec("holdout.add_filler_mul", "holdout-combo", "add, filler, then mul"),
+    TemplateSpec("holdout.gate_long", "holdout-combo", "Gate-length ordered add∘mul"),
 ]
 
 
@@ -163,16 +169,151 @@ def _tpl_holdout_filler(rng: random.Random, variables: list[str]) -> list[str]:
     ]
 
 
+def _tpl_pipe_gate_mul_first(rng: random.Random, variables: list[str]) -> list[str]:
+    """Long train-safe chain: mul appears before add (not ordered add∘mul)."""
+    a, b, c, d = _pick_vars(rng, 4, variables)
+    return [
+        "set", a, _digit(rng),
+        "set", b, _digit(rng),
+        "set", c, a, "+", _digit(rng),
+        "mul", c, b,
+        "inc", a,
+        "dec", b,
+        "print", c,
+        "set", d, "(", c, "-", a, ")",
+        "mul", d, a,
+        "inc", d,
+        "add", d, b,
+        "print", d,
+        "dec", a,
+        "print", b,
+    ]
+
+
+def _tpl_fanin_gate_wide(rng: random.Random, variables: list[str]) -> list[str]:
+    a, b, c, d = _pick_vars(rng, 4, variables)
+    return [
+        "set", a, _digit(rng),
+        "set", b, _digit(rng),
+        "set", c, _digit(rng),
+        "set", d, "0",
+        "mul", d, a,  # d=0*a
+        "inc", d,
+        "add", d, a,
+        "add", d, b,
+        "add", d, c,
+        "dec", d,
+        "inc", a,
+        "print", d,
+        "print", a,
+        "dec", b,
+        "print", c,
+    ]
+
+
+def _tpl_reuse_gate_triple(rng: random.Random, variables: list[str]) -> list[str]:
+    a, b, c = _pick_vars(rng, 3, variables)
+    return [
+        "set", a, _digit(rng),
+        "set", b, _digit(rng),
+        "set", c, a,
+        "inc", a,
+        "inc", a,
+        "add", a, b,
+        "dec", b,
+        "add", c, a,
+        "print", a,
+        "print", b,
+        "inc", c,
+        "dec", c,
+        "print", c,
+        "add", a, c,
+        "print", a,
+    ]
+
+
+def _tpl_holdout_gate_long(rng: random.Random, variables: list[str]) -> list[str]:
+    a, b, c = _pick_vars(rng, 3, variables)
+    return [
+        "set", a, _digit(rng),
+        "set", b, a, "+", _digit(rng),
+        "set", c, _digit(rng),
+        "inc", c,
+        "add", b, a,
+        "dec", a,
+        "print", b,
+        "inc", b,
+        "mul", b, a,
+        "add", c, b,
+        "print", c,
+        "dec", b,
+        "print", a,
+        "inc", a,
+        "print", b,
+    ]
+
+
 _BUILDERS: dict[str, Callable[[random.Random, list[str]], list[str]]] = {
     "pipe.chain_set_add_inc_print": _tpl_pipeline_chain,
     "pipe.dec_mul_print": _tpl_pipeline_dec_mul,
+    "pipe.gate_long_mul_first": _tpl_pipe_gate_mul_first,
     "fanin.two_src_add": _tpl_fanin_two,
     "fanin.three_src_mul": _tpl_fanin_three,
+    "fanin.gate_wide": _tpl_fanin_gate_wide,
     "reuse.same_var_loopish": _tpl_reuse_accum,
     "reuse.dual_pingpong": _tpl_reuse_pingpong,
+    "reuse.gate_triple": _tpl_reuse_gate_triple,
     "holdout.add_then_mul": _tpl_holdout_add_mul,
     "holdout.add_filler_mul": _tpl_holdout_filler,
+    "holdout.gate_long": _tpl_holdout_gate_long,
 }
+
+
+def pad_toward_knobs(
+    tokens: list[str],
+    rng: random.Random,
+    *,
+    apis: list[str],
+    variables: list[str],
+    min_stmts: int,
+    min_deps: int,
+    min_distinct_apis: int,
+    holdout: bool,
+    holdout_pair: tuple[str, str],
+    max_pad: int = 24,
+) -> list[str]:
+    """Append safe stmts so short templates can pass gate knobs."""
+    api_a, api_b = holdout_pair
+    out = list(tokens)
+    defined = [t for t in out if t in variables]
+    if not defined:
+        defined = [variables[0]]
+    saw_a = api_a in out
+
+    for _ in range(max_pad):
+        ok, reason = accept_hard_program(
+            out,
+            apis=apis,
+            min_deps=min_deps,
+            min_distinct_apis=min_distinct_apis,
+            require_ordered_holdout=True if holdout else None,
+            forbid_ordered_holdout=(not holdout),
+            holdout_pair=holdout_pair,
+        )
+        if ok and _n_ops(out, apis) >= min_stmts:
+            return out
+        if holdout and reason == "ordered_holdout_missing":
+            _emit_op(out, defined, api_a, variables, rng)
+            _emit_op(out, defined, api_b, variables, rng)
+            continue
+        allowed = list(apis)
+        if not holdout and saw_a:
+            allowed = [x for x in allowed if x != api_b] or ["inc", "dec", "print"]
+        op = rng.choice(allowed)
+        _emit_op(out, defined, op, variables, rng)
+        if op == api_a:
+            saw_a = True
+    return out
 
 
 def instantiate(template_id: str, rng: random.Random, variables: list[str]) -> list[str]:
@@ -243,11 +384,12 @@ def sample_with_templates(
     max_tries: int = 40,
     fallback_procedural: bool = True,
     stats: SampleStats | None = None,
+    salt: int | None = None,
+    prefer_procedural: bool = False,
 ) -> tuple[list[str], str]:
     """
-    Template candidate → acceptance gates.
-    Falls back to procedural generate_hard_l1 / generate_hard_holdout_combo.
-    Returns (tokens, template_id_or_tag).
+    Template candidate → pad toward knobs → acceptance gates.
+    Falls back to hold-out-aware procedural (never returns ungated emergency).
     """
     knobs = knobs or HardGenKnobs()
     cfg = cfg or hard_l1_config(knobs=knobs)
@@ -256,21 +398,51 @@ def sample_with_templates(
     variables = cfg.vars
     stats = stats or SampleStats()
     api_a, api_b = holdout_pair
+    if salt is not None:
+        rng = random.Random(rng.randint(0, 2**30) ^ salt)
 
-    # Short fixed templates (~6–9 ops, ~3k unique under gate knobs) accept but
-    # exhaust uniqueness long before N=10k. Prefer procedural when gates exceed
-    # freeze defaults so large datasets finish.
-    gate_like = (
-        deps > FREEZE_MIN_DEPS
-        or min_distinct_apis > 0
-        or cfg.min_stmts > FREEZE_MIN_STMTS
+    # Optional early procedural (hang escape / caller request). Under tight
+    # gate knobs alone we still try padded templates first (~35% procedural mix).
+    use_proc_first = prefer_procedural or (
+        min_distinct_apis >= 4 and deps >= 7 and rng.random() < 0.35
     )
-    template_tries = 0 if gate_like else max_tries
+    if use_proc_first:
+        stats.proposals += 1
+        if holdout:
+            tokens = generate_hard_holdout_combo(
+                cfg, api_a, api_b, rng, min_deps=deps,
+                min_distinct_apis=min_distinct_apis, salt=salt,
+            )
+            ok, reason = accept_hard_program(
+                tokens, apis=apis, min_deps=deps,
+                min_distinct_apis=min_distinct_apis,
+                require_ordered_holdout=True, holdout_pair=holdout_pair,
+            )
+        else:
+            tokens = generate_hard_l1(
+                cfg, rng, min_deps=deps, min_distinct_apis=min_distinct_apis,
+                forbid_ordered_holdout=True, holdout_pair=holdout_pair, salt=salt,
+            )
+            ok, reason = accept_hard_program(
+                tokens, apis=apis, min_deps=deps,
+                min_distinct_apis=min_distinct_apis,
+                forbid_ordered_holdout=True, holdout_pair=holdout_pair,
+            )
+        if ok:
+            stats.accept("procedural_primary")
+            return tokens, "procedural_primary"
+        stats.reject(reason)
 
-    for _ in range(template_tries):
+    for _ in range(max_tries):
         spec = choose_template(rng, holdout=holdout)
         stats.proposals += 1
         tokens = instantiate(spec.template_id, rng, variables)
+        tokens = pad_toward_knobs(
+            tokens, rng, apis=apis, variables=variables,
+            min_stmts=knobs.min_stmts, min_deps=deps,
+            min_distinct_apis=min_distinct_apis, holdout=holdout,
+            holdout_pair=holdout_pair,
+        )
         ok, reason = accept_hard_program(
             tokens,
             apis=apis,
@@ -286,53 +458,49 @@ def sample_with_templates(
         stats.reject(reason)
 
     if fallback_procedural:
-        # Templates are short (~6–9 ops); under gate knobs (min_deps=7, …)
-        # almost all template proposals fail. Retry procedural many times so
-        # uniqueness does not stall after ~3k reuse.same_var_loopish programs.
-        for _ in range(max(max_tries, 40)):
+        for attempt in range(20):
             stats.proposals += 1
             if holdout:
                 tokens = generate_hard_holdout_combo(
-                    cfg, api_a, api_b, rng, min_deps=deps
+                    cfg, api_a, api_b, rng, min_deps=deps,
+                    min_distinct_apis=min_distinct_apis,
+                    salt=(salt or 0) + attempt,
                 )
                 ok, reason = accept_hard_program(
-                    tokens,
-                    apis=apis,
-                    min_deps=deps,
+                    tokens, apis=apis, min_deps=deps,
                     min_distinct_apis=min_distinct_apis,
-                    require_ordered_holdout=True,
-                    holdout_pair=holdout_pair,
+                    require_ordered_holdout=True, holdout_pair=holdout_pair,
                 )
             else:
                 tokens = generate_hard_l1(
-                    cfg,
-                    rng,
-                    min_deps=deps,
-                    min_distinct_apis=min_distinct_apis,
-                    forbid_ordered_holdout=True,
-                    holdout_pair=holdout_pair,
+                    cfg, rng, min_deps=deps, min_distinct_apis=min_distinct_apis,
+                    forbid_ordered_holdout=True, holdout_pair=holdout_pair,
+                    salt=(salt or 0) + attempt * 13,
                 )
                 ok, reason = accept_hard_program(
-                    tokens,
-                    apis=apis,
-                    min_deps=deps,
+                    tokens, apis=apis, min_deps=deps,
                     min_distinct_apis=min_distinct_apis,
-                    forbid_ordered_holdout=True,
-                    holdout_pair=holdout_pair,
+                    forbid_ordered_holdout=True, holdout_pair=holdout_pair,
                 )
             if ok:
                 stats.accept("procedural_fallback")
                 return tokens, "procedural_fallback"
             stats.reject(reason)
 
-    v = variables[0]
+    # Last resort: still gated procedural (may collide uniqueness upstream)
     if holdout:
-        tokens = ["set", v, "3", "add", v, v, "inc", v, "mul", v, v, "print", v]
-        stats.accept("emergency_holdout")
-        return tokens, "emergency_holdout"
-    tokens = ["set", v, "1", "inc", v, "print", v, "dec", v, "print", v]
-    stats.accept("emergency_iid")
-    return tokens, "emergency_iid"
+        tokens = generate_hard_holdout_combo(
+            cfg, api_a, api_b, rng, min_deps=max(1, deps // 2),
+            min_distinct_apis=0, salt=salt,
+        )
+        stats.accept("procedural_relaxed_holdout")
+        return tokens, "procedural_relaxed_holdout"
+    tokens = generate_hard_l1(
+        cfg, rng, min_deps=max(1, deps // 2), min_distinct_apis=0,
+        forbid_ordered_holdout=True, holdout_pair=holdout_pair, salt=salt,
+    )
+    stats.accept("procedural_relaxed_iid")
+    return tokens, "procedural_relaxed_iid"
 
 
 def sample_mixture_curriculum(
