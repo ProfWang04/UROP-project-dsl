@@ -11,10 +11,15 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from src.data.generate import generate_dataset, save_dataset, load_split
+from src.data.generate import (
+    generate_dataset,
+    save_dataset,
+    load_split,
+    copy_train_split,
+)
 from src.dsl.tokens import PAD, BOS, EOS, build_vocab, Vocab
 from src.model.transformer import MiniGPT, ModelConfig, count_parameters
-from src.eval import evaluate_model
+from src.eval import FREE_GEN_PREVIEW_N, evaluate_model, free_gen_latest_meta
 
 
 class TokenDataset(Dataset):
@@ -58,6 +63,16 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--max-eval", type=int, default=100)
+    p.add_argument(
+        "--dump-free-gen",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Write every free-gen program to free_gen_<split>.jsonl under --out "
+            "(default: on). history.json keeps a 5-example preview plus "
+            "examples_path. Pass --no-dump-free-gen to disable."
+        ),
+    )
     p.add_argument(
         "--hard",
         action="store_true",
@@ -105,6 +120,9 @@ def main(argv: list[str] | None = None) -> None:
         train_seqs = split.train
         api_k = int(split.meta.get("api_k", api_k))
         level = args.level
+
+    # Full train split lives in the run folder even if --data-dir is external.
+    train_copy = copy_train_split(data_dir / "train.jsonl", out_dir)
 
     vocab = build_vocab(level=level, api_k=api_k)
     device = torch.device(args.device)
@@ -154,6 +172,9 @@ def main(argv: list[str] | None = None) -> None:
                 device=device,
                 max_samples=args.max_eval,
                 block_size=args.block_size,
+                dump_dir=out_dir if args.dump_free_gen else None,
+                seed=args.seed,
+                epoch=epoch,
             )
             row["metrics"] = metrics
             print(json.dumps(metrics, indent=2))
@@ -174,8 +195,25 @@ def main(argv: list[str] | None = None) -> None:
     }
     torch.save(ckpt, out_dir / "checkpoint.pt")
     (out_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    free_gen = free_gen_latest_meta(out_dir) if args.dump_free_gen else {}
+    run_meta = {
+        **ckpt["meta"],
+        "epochs": args.epochs,
+        "out": str(out_dir),
+        "data_dir": str(data_dir),
+        **train_copy,
+        "dump_free_gen": bool(args.dump_free_gen),
+        "free_gen_preview": FREE_GEN_PREVIEW_N,
+        "free_gen": free_gen,
+        "free_gen_note": (
+            "free_gen_<split>.jsonl is the latest exec-accept dump (every sample). "
+            "history.json metrics.<split>.examples is a "
+            f"{FREE_GEN_PREVIEW_N}-row preview; examples_path is "
+            "free_gen_<split>_epoch<E>.jsonl for that eval."
+        ),
+    }
     (out_dir / "run_meta.json").write_text(
-        json.dumps({**ckpt["meta"], "epochs": args.epochs, "out": str(out_dir)}, indent=2),
+        json.dumps(run_meta, indent=2),
         encoding="utf-8",
     )
     print(f"saved {out_dir / 'checkpoint.pt'}")

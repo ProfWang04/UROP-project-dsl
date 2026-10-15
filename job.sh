@@ -1,7 +1,7 @@
 #!/bin/bash
 # CSE COMPUTE job for Project DSL hard L1 grid (4 GPUs).
 # Workdir: /project/zihanz_project1/urop-dsl-hard-l1
-  SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)|  SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)
+# SUBMIT JOB: GPU count = 4 (or 1 for smoke/diag)
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH=.
@@ -52,6 +52,13 @@ run_one() {
   : >"$log"  # truncate so this run is readable from line 1
   log_line "$log" "start gpu=$gpu k=$k N=$n seed=$seed arm=$arm -> $out"
   log_line "$log" "env CUDA_VISIBLE_DEVICES=$gpu PYTHONUNBUFFERED=$PYTHONUNBUFFERED"
+  # train.py copies the full train split to $out/train.jsonl and writes every
+  # free-gen sample (not the 5-row history preview) to:
+  #   $out/free_gen_test_iid.jsonl
+  #   $out/free_gen_test_holdout.jsonl
+  # Per-epoch copies are free_gen_<split>_epoch<E>.jsonl; history examples_path
+  # points at those. --dump-free-gen is the default; passed here so grid logs show it.
+  log_line "$log" "dumps: $out/train.jsonl $out/free_gen_test_iid.jsonl $out/free_gen_test_holdout.jsonl"
   # Remap so this process only sees one GPU as cuda:0 (avoids multi-proc CUDA fights).
   if ! CUDA_VISIBLE_DEVICES="$gpu" python3 -u -m src.train \
     --hard \
@@ -65,6 +72,7 @@ run_one() {
     --device cuda \
     --eval-every 15 \
     --max-eval 80 \
+    --dump-free-gen \
     --out "$out" \
     > >(tee -a "$log") 2>&1
   then
@@ -132,10 +140,12 @@ case "${1:-grid4}" in
     cuda_diag | tee logs/cuda_diag_smoke.log
     : >logs/smoke_k6_n200.log
     log_line logs/smoke_k6_n200.log "smoke start"
+    log_line logs/smoke_k6_n200.log "dumps: results/grid_kN/smoke_k6_n200/train.jsonl results/grid_kN/smoke_k6_n200/free_gen_test_iid.jsonl results/grid_kN/smoke_k6_n200/free_gen_test_holdout.jsonl"
     CUDA_VISIBLE_DEVICES=0 python3 -u -m src.train \
       --hard --gate-knobs --arm hard \
       --n-train 200 --epochs 2 --batch-size 32 --block-size 128 \
       --device cuda --max-eval 20 \
+      --dump-free-gen \
       --out results/grid_kN/smoke_k6_n200 \
       > >(tee -a logs/smoke_k6_n200.log) 2>&1
     log_line logs/smoke_k6_n200.log "smoke done"

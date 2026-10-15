@@ -54,10 +54,11 @@ src/dsl/       # tokens, L0/L1 interpreters, legal continuations
 src/data/      # samplers + IID / hold-out (toy hold-out today)
 src/model/     # MiniGPT (~4×128)
 src/train.py   # NTP training
-src/eval.py    # legal-next, exec-accept (sampled)
+src/eval.py    # legal-next, exec-accept (sampled; full free-gen jsonl)
 docs/          # plan pointer + migration note
 tests/
 results/       # sanity archive; grid runs go under grid_kN/
+                 # each run also has train.jsonl + free_gen_*.jsonl
 ```
 
 ## Metrics
@@ -69,3 +70,20 @@ results/       # sanity archive; grid runs go under grid_kN/
 | hold-out split | Same on A∘B programs never seen in training |
 
 “Learned”: IID `exec_accept_rate` ≥ 90%. Critical N = smallest N that crosses that line at fixed k.
+
+## Run dumps (full free-gen + train)
+
+`src.train` (including every `job.sh` grid/smoke cell) writes a self-contained `--out` folder. `history.json` still stores only a **5-program preview** in `metrics.<split>.examples`. The full sample is on disk.
+
+| File | Contents |
+|------|----------|
+| `train.jsonl` | Copy of the full training split (`data/train.jsonl`, or the file from `--data-dir`). |
+| `free_gen_test_iid.jsonl` | Every free-gen program from the **latest** exec-accept eval on IID. |
+| `free_gen_test_holdout.jsonl` | Same for the hold-out split, when that split is non-empty. |
+| `free_gen_<split>_epoch<E>.jsonl` | Full dump for eval at epoch E (not overwritten by later evals). |
+| `history.json` | Per-epoch metrics. `examples` is the 5-row preview; `examples_path` points at the epoch jsonl. |
+| `run_meta.json` | `train_jsonl`, `train_jsonl_source`, `n_train_saved`, `data_dir`, and `free_gen` (latest path + line count). |
+
+Each free-gen jsonl row has `step`, `tokens` (including `<bos>` / `<eos>`), `ok`, `error`, `n_new_tokens`, plus `seed`, `epoch`, and `split` when the run supplies them.
+
+`exec_accept_rate`, `n_unique_programs`, and legal-next rates are still computed on the full sample, not the preview. Pass `--no-dump-free-gen` to skip the jsonl dumps; the train copy is still written. `job.sh` passes `--dump-free-gen` explicitly. Standalone eval: `python3 -m src.eval --checkpoint ... --data-dir ... --out <run_dir>`.
