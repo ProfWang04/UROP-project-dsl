@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import random
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -468,6 +469,41 @@ def load_split(path: Path | str) -> list[list[str]]:
         for line in f:
             rows.append(json.loads(line)["tokens"])
     return rows
+
+
+def count_jsonl_lines(path: Path | str) -> int:
+    """Count non-empty lines in a jsonl file."""
+    path = Path(path)
+    n = 0
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                n += 1
+    return n
+
+
+def copy_train_split(source: Path | str, dest_dir: Path | str) -> dict:
+    """Copy the full train jsonl into a run directory.
+
+    Destination is always ``<dest_dir>/train.jsonl`` so each run folder is
+    self-contained even when training read an external ``--data-dir``.
+    If source and dest are the same file, the copy is skipped.
+
+    Returns fields meant for ``run_meta.json``.
+    """
+    source = Path(source)
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "train.jsonl"
+    if not source.is_file():
+        raise FileNotFoundError(f"train split not found: {source}")
+    if source.resolve() != dest.resolve():
+        shutil.copy2(source, dest)
+    return {
+        "train_jsonl": str(dest),
+        "train_jsonl_source": str(source),
+        "n_train_saved": count_jsonl_lines(dest),
+    }
 
 
 def main(argv: list[str] | None = None) -> None:

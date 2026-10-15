@@ -17,3 +17,7 @@ Current code is the **toy / pipeline slice** (L0 + easy L1, k=3, N=1e3 sanity �
 | L0 / unit tests as CI smoke | Early-stopping + grid scripts |
 
 Do not treat high exec-accept on k=3 N=1e3 as “Phase 1 done.”
+
+## Run artifacts for collapse / op-repetition audits
+
+Grid cells (`bash job.sh`, `python3 -m src.train`) copy the full train split to `<out>/train.jsonl` and write **every** free-gen program to `<out>/free_gen_test_iid.jsonl` and `<out>/free_gen_test_holdout.jsonl` (latest eval). Per-epoch files are `free_gen_<split>_epoch<E>.jsonl`. `history.json` keeps a 5-example preview plus `examples_path`. Paths and line counts are in `<out>/run_meta.json`. See README “Run dumps”.

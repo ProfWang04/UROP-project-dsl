@@ -17,10 +17,10 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.generate import generate_l1_dataset, save_dataset, load_split
+from src.data.generate import generate_l1_dataset, save_dataset, load_split, copy_train_split
 from src.dsl.tokens import PAD, build_vocab, Vocab
 from src.model.transformer import MiniGPT, ModelConfig, count_parameters
-from src.eval import evaluate_model
+from src.eval import evaluate_model, free_gen_latest_meta
 from src.train import TokenDataset
 
 
@@ -52,6 +52,7 @@ def _train_one(
     )
     data_dir = out_dir / "data"
     save_dataset(split, data_dir)
+    train_copy = copy_train_split(data_dir / "train.jsonl", out_dir)
 
     api_k = int(split.meta["api_k"])
     vocab = build_vocab(level="l1", api_k=api_k)
@@ -93,6 +94,9 @@ def _train_one(
         device=device,
         max_samples=max_eval,
         block_size=block_size,
+        dump_dir=out_dir,
+        seed=seed,
+        epoch=epochs,
     )
     result = {
         "arm": arm,
@@ -117,6 +121,10 @@ def _train_one(
             },
         },
         "final_loss": history[-1]["loss"] if history else None,
+        "train_jsonl": train_copy["train_jsonl"],
+        "train_jsonl_source": train_copy["train_jsonl_source"],
+        "n_train_saved": train_copy["n_train_saved"],
+        "free_gen": free_gen_latest_meta(out_dir),
     }
     torch.save(
         {

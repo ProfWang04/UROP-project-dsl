@@ -53,7 +53,7 @@ PYTHONPATH=. python3 -m src.train --arm mixture --n-train 1000 \
   --epochs 15 --block-size 128 --out results/runs/mix_n1000
 ```
 
-Outputs per run: `data/manifest.json` (template IDs, reject rates, `holdout_pair_hash`, freeze vs knobs).  
+Outputs per run: `data/manifest.json` (template IDs, reject rates, `holdout_pair_hash`, freeze vs knobs), plus `train.jsonl` and full free-gen dumps `free_gen_test_iid.jsonl` / `free_gen_test_holdout.jsonl` (history keeps a 5-row preview).  
 Curve rollup: `results/n_curve_k6/curve_manifest.json` with `N_star_by_arm`.
 
 Primary metrics: **exec-accept** (IID + hold-out). Secondary: legal-next.
