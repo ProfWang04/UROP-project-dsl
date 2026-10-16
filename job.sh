@@ -60,7 +60,7 @@ run_one() {
   # points at those. --dump-free-gen is the default; passed here so grid logs show it.
   log_line "$log" "dumps: $out/train.jsonl $out/free_gen_test_iid.jsonl $out/free_gen_test_holdout.jsonl"
   # Remap so this process only sees one GPU as cuda:0 (avoids multi-proc CUDA fights).
-  if ! CUDA_VISIBLE_DEVICES="$gpu" python3 -u -m src.train \
+  if CUDA_VISIBLE_DEVICES="$gpu" python3 -u -m src.train \
     --hard \
     --gate-knobs \
     --arm "$arm" \
@@ -76,11 +76,12 @@ run_one() {
     --out "$out" \
     > >(tee -a "$log") 2>&1
   then
+    log_line "$log" "done gpu=$gpu k=$k N=$n seed=$seed -> $out"
+  else
     local rc=$?
     log_line "$log" "FAILED rc=$rc gpu=$gpu k=$k N=$n seed=$seed"
     return "$rc"
   fi
-  log_line "$log" "done gpu=$gpu k=$k N=$n seed=$seed -> $out"
 }
 
 case "${1:-grid4}" in

@@ -285,7 +285,7 @@ def generate_l1_dataset(
 
     print(
         f"[generate] start arm={arm} n_train={n_train} gate_knobs={gate_knobs} "
-        f"knobs={knobs.to_dict()} holdout={api_a}∘{api_b}",
+        f"knobs={knobs.to_dict()} holdout={api_a}->{api_b}",
         flush=True,
     )
     seen: set[tuple[str, ...]] = set()
@@ -307,7 +307,7 @@ def generate_l1_dataset(
     if arm == "mixture":
         dup_streak = 0
         attempts = 0
-        while len(test_iid) < n_test_iid:
+        while len(test_iid) < n_test_iid and attempts < max(50_000, n_test_iid * 50):
             attempts += 1
             toks, _tid = sample_iid_hard(iid_stats, attempts, prefer=dup_streak >= 8)
             ok, _ = accept_hard_program(
@@ -344,6 +344,9 @@ def generate_l1_dataset(
             n_test_iid, holdout=False, stats=iid_stats, split_name="test_iid",
             seen=seen,
         )
+
+    if len(test_iid) != n_test_iid:
+        raise RuntimeError(f"Failed to gather {n_test_iid} unique test_iid programs (got {len(test_iid)})")
 
     test_holdout = fill_unique(
         n_test_holdout, holdout=True, stats=holdout_stats, split_name="test_holdout",
@@ -420,6 +423,8 @@ def generate_dataset(
     **kwargs,
 ) -> DatasetSplit:
     if level == "l0":
+        for option in ("gate_knobs", "use_templates"):
+            kwargs.pop(option, None)
         return generate_l0_dataset(n_train=n_train, seed=seed, **kwargs)
     return generate_l1_dataset(
         n_train=n_train, api_k=api_k, seed=seed, hard=hard, arm=arm, **kwargs
@@ -538,7 +543,7 @@ def main(argv: list[str] | None = None) -> None:
                 "out": str(out),
                 "arm": split.meta.get("arm"),
                 "holdout_pair_hash": split.meta.get("holdout_pair_hash"),
-                "reject_rate_train": split.meta["sample_stats"]["train"]["reject_rate"],
+                "reject_rate_train": split.meta.get("sample_stats", {}).get("train", {}).get("reject_rate"),
                 "n_holdout": len(split.test_holdout),
             }
         )

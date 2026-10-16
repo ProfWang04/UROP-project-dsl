@@ -82,7 +82,7 @@ def test_free_gen_dump_writes_every_sample(tmp_path: Path):
     n_ok = sum(1 for row in rows if row["ok"])
     assert result["exec_accept_rate"] == n_ok / n
     bodies = {
-        tuple(tok for tok in row["tokens"] if tok not in (BOS, EOS, PAD)) for row in rows
+        tuple(row["tokens"][1:-1] if row["tokens"][-1] == EOS else row["tokens"][1:]) for row in rows
     }
     assert result["n_unique_programs"] == len(bodies)
     assert [row["step"] for row in rows] == list(range(n))
@@ -124,7 +124,13 @@ def test_accept_rate_uses_full_sample_not_preview(tmp_path: Path, monkeypatch):
         ok = calls["n"] > FREE_GEN_PREVIEW_N
         return type("R", (), {"ok": ok, "error": None if ok else "nope"})()
 
-    monkeypatch.setattr("src.eval.evaluate_l0", fake_eval)
+    monkeypatch.setattr("src.dsl.verification.evaluate_l0", fake_eval)
+    # Deterministic complete programs keep this test about full-sample counting.
+    def scripted_forward(self, idx, targets=None):
+        logits = torch.full((1, idx.size(1), self.cfg.vocab_size), -float("inf"))
+        logits[:, -1, vocab.id("1" if idx.size(1) == 1 else EOS)] = 0
+        return logits, None
+    monkeypatch.setattr(MiniGPT, "forward", scripted_forward)
     n = 8
     vocab = build_vocab(level="l0")
     model = _tiny_model(vocab)
@@ -139,7 +145,7 @@ def test_accept_rate_uses_full_sample_not_preview(tmp_path: Path, monkeypatch):
         device=torch.device("cpu"),
         max_samples=n,
         block_size=32,
-        max_new_tokens=1,
+        max_new_tokens=2,
         dump_paths=[path],
         examples_path=path,
         seed=0,

@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from src.data.generate import generate_l1_dataset, save_dataset, load_split, copy_train_split
 from src.dsl.tokens import PAD, build_vocab, Vocab
 from src.model.transformer import MiniGPT, ModelConfig, count_parameters
-from src.eval import evaluate_model, free_gen_latest_meta
+from src.eval import EVALUATION_VERSION, evaluate_model, free_gen_latest_meta
 from src.train import TokenDataset
 
 
@@ -99,6 +99,11 @@ def _train_one(
         epoch=epochs,
     )
     result = {
+        "evaluation_version": EVALUATION_VERSION,
+        "level": "l1",
+        "api_k": api_k,
+        "training_args": {"lr": lr, "batch_size": batch_size, "block_size": block_size,
+                          "max_eval": max_eval, "device": str(device)},
         "arm": arm,
         "n_train": n_train,
         "seed": seed,
@@ -113,11 +118,11 @@ def _train_one(
         "metrics": {
             "test_iid": {
                 k: metrics.get("test_iid", {}).get(k)
-                for k in ("legal_next_rate", "exec_accept_rate", "n", "n_unique_programs")
+                for k in ("legal_next_rate", "exec_accept_rate", "interpreter_accept_rate", "n", "n_unique_programs")
             },
             "test_holdout": {
                 k: metrics.get("test_holdout", {}).get(k)
-                for k in ("legal_next_rate", "exec_accept_rate", "n", "n_unique_programs")
+                for k in ("legal_next_rate", "exec_accept_rate", "interpreter_accept_rate", "n", "n_unique_programs")
             },
         },
         "final_loss": history[-1]["loss"] if history else None,
@@ -164,6 +169,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--threshold", type=float, default=0.9, help="N* IID exec-accept threshold")
     p.add_argument("--out", type=str, default="results/n_curve_k6")
     args = p.parse_args(argv)
+    if args.epochs < 1 or args.max_eval < 1 or any(n < 1 for n in args.n_grid):
+        p.error("epochs, max-eval, and n-grid values must be positive")
+    if any(arm not in ("hard", "mixture") for arm in args.arms):
+        p.error("arms must be hard or mixture")
 
     device = torch.device(args.device)
     root = Path(args.out)
@@ -213,9 +222,10 @@ def main(argv: list[str] | None = None) -> None:
         (root / f"summary_{arm}.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
         )
-        print(f"arm={arm} N*(6) @≥{args.threshold}: {n_star}")
+        print(f"arm={arm} N*(6) @>={args.threshold}: {n_star}")
 
     curve_manifest = {
+        "evaluation_version": EVALUATION_VERSION,
         "description": "Two-arm N(k=6) curve with Cadmus-style template sampling",
         "freeze_defaults": all_results[0]["freeze_defaults"] if all_results else {},
         "gate_knobs_reference_note": "Not used unless --gate-knobs at data gen; curve uses freeze defaults",

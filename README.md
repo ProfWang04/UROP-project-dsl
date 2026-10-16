@@ -2,9 +2,26 @@
 
 Executable mini-DSL with an **interpreter as hard verifier** and a small Transformer trained with **NTP only**. Goal: critical learnability vs API count `k` and data size `N`, with SCAN-style composition hold-out.
 
-> **Repo status (2026-10-14):** code here is the **toy pipeline slice** (easy L1, `k=3`, `N=1000` sanity ≫ random). That run is a **historical baseline**, not the main claim. The active plan is the **harder L1 × full k×N×seed grid** — see [`docs/phase1-experiment-plan.md`](docs/phase1-experiment-plan.md) and the Project store plan.
+> **Repo status (2026-10-16):** soft L0/L1 and hard/mixture k=6 pipelines are implemented. Evaluation version 2 fixes split completion scoring; archived results use the old contract. The full variable-k grid remains future work. See [the experiment guide](docs/experiment-guide.md).
 
 Aligned with WJP × Zihan Zhang UROP explore (not UTM / not Dyck-only / no Phase-1 RL).
+
+
+## Current implementation and scoring
+
+See [the detailed experiment guide](docs/experiment-guide.md) for the maintained
+reference to every component, defaults, commands, metrics, and limitations.
+
+**Evaluation version 2:** L1 execution scores now use test-program prefix
+completions and enforce split membership and hard-task minima. Plain execution
+validity is reported separately as `interpreter_accept_rate`. Historical results
+in this repository use the previous scoring contract and need reevaluation;
+they are not directly comparable. The legacy `free_gen_*` filenames now store
+prefix completions for L1. Use fresh output directories for new runs.
+
+Omitting `--arm` in training selects the legacy soft sampler and honors
+`--api-k`; use `--arm hard` or `--hard` for the fixed-k=6 hard experiment.
+The default training block size is 128, and oversized programs fail explicitly.
 
 ## Setup
 
@@ -66,7 +83,7 @@ results/       # sanity archive; grid runs go under grid_kN/
 | Metric | Meaning |
 |--------|---------|
 | `legal_next_rate` | P(argmax next ∈ interpreter legal set) |
-| `exec_accept_rate` | Sampled autoregressive program accepted by interpreter (**main**) |
+| `exec_accept_rate` | Sampled completion meeting execution and split constraints (**main**, v2) |
 | hold-out split | Same on A∘B programs never seen in training |
 
 “Learned”: IID `exec_accept_rate` ≥ 90%. Critical N = smallest N that crosses that line at fixed k.
@@ -84,6 +101,6 @@ results/       # sanity archive; grid runs go under grid_kN/
 | `history.json` | Per-epoch metrics. `examples` is the 5-row preview; `examples_path` points at the epoch jsonl. |
 | `run_meta.json` | `train_jsonl`, `train_jsonl_source`, `n_train_saved`, `data_dir`, and `free_gen` (latest path + line count). |
 
-Each free-gen jsonl row has `step`, `tokens` (including `<bos>` / `<eos>`), `ok`, `error`, `n_new_tokens`, plus `seed`, `epoch`, and `split` when the run supplies them.
+Each free-gen jsonl row also records `prefix_tokens`, `interpreter_ok`, `sampling_seed`, and `evaluation_version`. Each row has `step`, `tokens` (including `<bos>` / `<eos>`), `ok`, `error`, `n_new_tokens`, plus `seed`, `epoch`, and `split` when the run supplies them.
 
 `exec_accept_rate`, `n_unique_programs`, and legal-next rates are still computed on the full sample, not the preview. Pass `--no-dump-free-gen` to skip the jsonl dumps; the train copy is still written. `job.sh` passes `--dump-free-gen` explicitly. Standalone eval: `python3 -m src.eval --checkpoint ... --data-dir ... --out <run_dir>`.

@@ -10,23 +10,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 from pathlib import Path
 
 import torch
 
 from src.data.generate import count_jsonl_lines, load_split
 from src.dsl.continuations import legal_continuations
-from src.dsl.l0 import evaluate_l0
-from src.dsl.l1 import evaluate_l1
-from src.dsl.tokens import BOS, EOS, PAD, Vocab, build_vocab
+from src.dsl.tokens import BOS, EOS, Vocab, build_vocab
+from src.dsl.verification import EVALUATION_VERSION, completion_prefix, check_generated_program
 from src.model.transformer import MiniGPT, ModelConfig
 
 # history.json keeps this many free-gen rows inline. The jsonl dump is complete.
 FREE_GEN_PREVIEW_N = 5
-
-
-def _strip_special(tokens: list[str]) -> list[str]:
-    return [t for t in tokens if t not in (BOS, EOS, PAD)]
 
 
 def free_gen_paths(
@@ -109,6 +105,11 @@ def teacher_forced_metrics(
             if len(ids) < 2:
                 continue
             x = torch.tensor(ids[:-1], dtype=torch.long, device=device).unsqueeze(0)
+            if x.size(1) > model.cfg.block_size:
+                raise ValueError(
+                    f"Evaluation sequence length {x.size(1)} exceeds "
+                    f"block_size={model.cfg.block_size}; increase --block-size."
+                )
             logits, _ = model(x)
             preds = logits[0]  # T, V
             for t in range(len(ids) - 1):
@@ -144,7 +145,7 @@ def execution_accept_rate(
     device: torch.device,
     max_samples: int,
     block_size: int,
-    max_new_tokens: int = 48,
+    max_new_tokens: int | None = None,
     temperature: float = 1.0,
     preview_n: int = FREE_GEN_PREVIEW_N,
     dump_paths: list[Path | str] | None = None,
@@ -152,26 +153,31 @@ def execution_accept_rate(
     seed: int | None = None,
     epoch: int | None = None,
     split: str | None = None,
+    dataset_meta: dict | None = None,
+    condition_on_prefix: bool = False,
 ) -> dict:
-    """Autoregressive generation from BOS; interpreter accept rate.
+    """Sample completions and score framing, execution, and split constraints.
 
-    Uses temperature sampling (not greedy) so mode-collapse does not inflate
-    accept rate by repeating one valid program.
-
-    ``examples`` is only a preview (default 5). When ``dump_paths`` is set,
-    every sample is written as one jsonl record (tokens, ok, error, step,
-    and seed/epoch/split when provided). Rates still use the full sample.
+    Direct callers default to unconditional BOS generation. evaluate_model uses
+    test prefixes. Local RNG sampling does not perturb the training RNG stream.
     """
     model.eval()
-    bos_id = vocab.id(BOS)
     eos_id = vocab.id(EOS)
     n_ok = 0
+    n_valid = 0
     n = 0
     examples: list[dict] = []
     unique: set[tuple[str, ...]] = set()
     paths = [Path(p) for p in (dump_paths or [])]
     handles: list = []
     advertised: str | None = None
+    max_new_tokens = block_size if max_new_tokens is None else max_new_tokens
+    if max_new_tokens < 1 or max_samples < 1:
+        raise ValueError("max_new_tokens and max_samples must be positive")
+    sample_seed = int.from_bytes(hashlib.sha256(
+        f"{seed or 0}:{epoch or 0}:{split or 'unconditional'}".encode()
+    ).digest()[:8], "big") % (2**63 - 1)
+    generator = torch.Generator(device=device).manual_seed(sample_seed)
 
     try:
         for path in paths:
@@ -182,16 +188,19 @@ def execution_accept_rate(
         elif paths:
             advertised = str(paths[0])
 
-        for step, _seq in enumerate(sequences[:max_samples]):
+        for step, seq in enumerate(sequences[:max_samples]):
             n += 1
-            idx = torch.tensor([[bos_id]], dtype=torch.long, device=device)
+            prefix = completion_prefix(seq, level, api_k) if condition_on_prefix else [BOS]
+            idx = torch.tensor([vocab.encode(prefix)], dtype=torch.long, device=device)
             n_new_tokens = 0
-            for _gen_step in range(max_new_tokens):
+            if len(prefix) >= block_size:
+                raise ValueError("Completion prefix fills the context; increase --block-size")
+            for _gen_step in range(min(max_new_tokens, block_size - len(prefix))):
                 idx_cond = idx[:, -block_size:]
                 logits, _ = model(idx_cond)
                 logits = logits[0, -1] / max(temperature, 1e-6)
                 probs = torch.softmax(logits, dim=-1)
-                next_id = int(torch.multinomial(probs, num_samples=1).item())
+                next_id = int(torch.multinomial(probs, num_samples=1, generator=generator).item())
                 idx = torch.cat(
                     [idx, torch.tensor([[next_id]], device=device)], dim=1
                 )
@@ -200,20 +209,18 @@ def execution_accept_rate(
                     break
             gen_ids = idx[0].tolist()
             gen_toks = vocab.decode(gen_ids)
-            body = _strip_special(gen_toks)
+            body = gen_toks[1:-1] if gen_toks[-1] == EOS else gen_toks[1:]
             unique.add(tuple(body))
-            if level == "l0":
-                result = evaluate_l0(body)
-            else:
-                result = evaluate_l1(body, api_k=api_k)
-            if result.ok:
-                n_ok += 1
-            error = None if result.ok else getattr(result, "error", None)
+            ok, valid, error = check_generated_program(
+                gen_toks, level, api_k, dataset_meta, split
+            )
+            n_ok += int(ok)
+            n_valid += int(valid)
             if len(examples) < preview_n:
                 examples.append(
                     {
                         "tokens": gen_toks,
-                        "ok": result.ok,
+                        "ok": ok,
                         "error": error,
                     }
                 )
@@ -221,13 +228,19 @@ def execution_accept_rate(
                 record = _free_gen_record(
                     step=step,
                     tokens=gen_toks,
-                    ok=result.ok,
+                    ok=ok,
                     error=error,
                     n_new_tokens=n_new_tokens,
                     seed=seed,
                     epoch=epoch,
                     split=split,
                 )
+                record.update({
+                    "prefix_tokens": prefix,
+                    "interpreter_ok": valid,
+                    "evaluation_version": EVALUATION_VERSION,
+                    "sampling_seed": sample_seed,
+                })
                 line = json.dumps(record) + "\n"
                 for handle in handles:
                     handle.write(line)
@@ -238,6 +251,12 @@ def execution_accept_rate(
     out = {
         "n": n,
         "exec_accept_rate": n_ok / n if n else 0.0,
+        "interpreter_accept_rate": n_valid / n if n else 0.0,
+        "evaluation_version": EVALUATION_VERSION,
+        "generation_mode": "prefix_completion" if condition_on_prefix else "unconditional",
+        "prefix_policy": "first_statement" if condition_on_prefix and level == "l1" else "bos",
+        "max_new_tokens": max_new_tokens,
+        "sampling_seed": sample_seed,
         "n_unique_programs": len(unique),
         "examples": examples,
     }
@@ -254,7 +273,7 @@ def evaluate_model(
     api_k: int = 3,
     device: torch.device | None = None,
     max_samples: int = 100,
-    block_size: int = 64,
+    block_size: int = 128,
     dump_dir: Path | str | None = None,
     seed: int | None = None,
     epoch: int | None = None,
@@ -263,6 +282,8 @@ def evaluate_model(
     device = device or torch.device("cpu")
     data_dir = Path(data_dir)
     out: dict = {}
+    meta_path = data_dir / "meta.json"
+    dataset_meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     for split_name in ("test_iid", "test_holdout"):
         path = data_dir / f"{split_name}.jsonl"
@@ -295,6 +316,8 @@ def evaluate_model(
             seed=seed,
             epoch=epoch,
             split=split_name,
+            dataset_meta=dataset_meta,
+            condition_on_prefix=True,
         )
         out[split_name] = {
             **tf,
@@ -321,6 +344,7 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--epoch", type=int, default=None, help="Sampling epoch; defaults to checkpoint training epochs")
     args = p.parse_args(argv)
 
     ckpt = torch.load(args.checkpoint, map_location=args.device, weights_only=False)
@@ -333,6 +357,12 @@ def main(argv: list[str] | None = None) -> None:
     model.load_state_dict(ckpt["model"])
     model.to(args.device)
     meta = ckpt.get("meta", {})
+    dataset_meta = json.loads((Path(args.data_dir) / "meta.json").read_text(encoding="utf-8"))
+    level = dataset_meta["level"]
+    api_k = int(dataset_meta.get("api_k", meta.get("api_k", 3)))
+    if (meta.get("level", level) != level or int(meta.get("api_k", api_k)) != api_k
+            or build_vocab(level, api_k).id_to_token != vocab.id_to_token):
+        p.error("Checkpoint and dataset language/vocabulary do not match")
     dump_dir: Path | None = None
     if args.out:
         from src.data.generate import copy_train_split
@@ -346,13 +376,14 @@ def main(argv: list[str] | None = None) -> None:
         model,
         vocab,
         args.data_dir,
-        level=meta.get("level", "l1"),
-        api_k=int(meta.get("api_k", 3)),
+        level=level,
+        api_k=api_k,
         device=torch.device(args.device),
         max_samples=args.max_samples,
         block_size=cfg.block_size,
         dump_dir=dump_dir,
         seed=args.seed if args.seed is not None else meta.get("seed"),
+        epoch=args.epoch if args.epoch is not None else meta.get("epochs"),
     )
     print(json.dumps(metrics, indent=2))
 

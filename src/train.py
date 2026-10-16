@@ -19,7 +19,7 @@ from src.data.generate import (
 )
 from src.dsl.tokens import PAD, BOS, EOS, build_vocab, Vocab
 from src.model.transformer import MiniGPT, ModelConfig, count_parameters
-from src.eval import FREE_GEN_PREVIEW_N, evaluate_model, free_gen_latest_meta
+from src.eval import EVALUATION_VERSION, FREE_GEN_PREVIEW_N, evaluate_model, free_gen_latest_meta
 
 
 class TokenDataset(Dataset):
@@ -28,12 +28,20 @@ class TokenDataset(Dataset):
         self.block_size = block_size
         self.pad_id = vocab.id(PAD)
         self.data = [vocab.encode(seq) for seq in sequences]
+        if block_size < 2:
+            raise ValueError("block_size must be at least 2")
+        longest = max((len(ids) for ids in self.data), default=0)
+        if longest > block_size:
+            raise ValueError(
+                f"Training sequence length {longest} exceeds block_size={block_size}; "
+                "increase --block-size. Programs must not be silently truncated."
+            )
 
     def __len__(self) -> int:
         return len(self.data)
 
     def __getitem__(self, idx: int):
-        ids = self.data[idx][: self.block_size]
+        ids = self.data[idx]
         # input = all but last; target = all but first
         x = ids[:-1]
         y = ids[1:]
@@ -57,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--n-layer", type=int, default=4)
     p.add_argument("--n-embd", type=int, default=128)
     p.add_argument("--n-head", type=int, default=4)
-    p.add_argument("--block-size", type=int, default=64)
+    p.add_argument("--block-size", type=int, default=128)
     p.add_argument("--data-dir", type=str, default="")
     p.add_argument("--out", type=str, default="results/runs/l1_k3_n1000")
     p.add_argument("--device", type=str, default="cpu")
@@ -80,9 +88,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.add_argument(
         "--arm",
-        choices=["hard", "mixture"],
-        default="hard",
-        help="Data arm: hard-only k=6 or mixture k'∈{2,3,6}",
+        choices=["soft", "hard", "mixture"],
+        default=None,
+        help="Data arm: soft (default, honors api-k), hard k=6, or mixture k in {2,3,6}",
     )
     p.add_argument(
         "--gate-knobs",
@@ -90,6 +98,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Use historical difficulty-gate knobs (not freeze defaults)",
     )
     args = p.parse_args(argv)
+    if args.epochs < 1 or args.eval_every < 1 or args.max_eval < 1:
+        p.error("epochs, eval-every, and max-eval must be positive")
+    if args.hard and args.arm == "soft":
+        p.error("--hard conflicts with --arm soft")
+    args.arm = args.arm or ("hard" if args.hard else "soft")
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -100,7 +113,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.data_dir:
         data_dir = Path(args.data_dir)
         train_seqs = load_split(data_dir / "train.jsonl")
-        meta = json.loads((data_dir / "meta.json").read_text())
+        meta = json.loads((data_dir / "meta.json").read_text(encoding="utf-8"))
         api_k = int(meta.get("api_k", args.api_k))
         level = meta.get("level", args.level)
     else:
@@ -188,9 +201,11 @@ def main(argv: list[str] | None = None) -> None:
         "meta": {
             "level": level,
             "api_k": api_k,
-            "n_train": args.n_train,
+            "n_train": len(train_seqs),
             "seed": args.seed,
             "n_params": n_params,
+            "epochs": args.epochs,
+            "evaluation_version": EVALUATION_VERSION,
         },
     }
     torch.save(ckpt, out_dir / "checkpoint.pt")
@@ -199,6 +214,8 @@ def main(argv: list[str] | None = None) -> None:
     run_meta = {
         **ckpt["meta"],
         "epochs": args.epochs,
+        "evaluation_version": EVALUATION_VERSION,
+        "training_args": vars(args),
         "out": str(out_dir),
         "data_dir": str(data_dir),
         **train_copy,
